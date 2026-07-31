@@ -49,6 +49,28 @@ class AgentLoop:
         max_tokens: int = 4096,
         thinking_enabled: bool = True,
     ):
+        """初始化 Agent 循环实例。
+
+        Args:
+            provider: LLM provider 实例，负责与具体大模型 API 通信
+                （如 OpenAI、Anthropic 等）。
+            workspace: 工作区根目录路径，作为工具执行的基准目录。
+            tools: 工具注册表（ToolRegistry）实例，管理所有可用工具的
+                定义与调度。
+            context_builder: 上下文构建器，负责将对话历史、系统提示、
+                当前消息等组装成 LLM 可接收的 messages 格式。为 None 时
+                使用默认的消息拼接逻辑。
+            session_manager: 会话管理器，用于持久化对话历史。
+            subagent_manager: 子代理管理器，用于派生与管理子代理。
+            model: 指定使用的模型名称，None 表示使用 provider 的默认模型。
+            max_iterations: 单次请求的最大 Agent 循环迭代次数，默认 25。
+            max_retries: 工具调用失败时的最大重试次数，默认 3。
+            retry_delay: 工具调用重试之间的等待秒数，默认 1.0。
+            temperature: LLM 采样温度（0.0 = 确定性输出），默认 0.0。
+            max_tokens: LLM 单次响应的最大 token 数，默认 4096。
+            thinking_enabled: 是否启用模型的思考/推理链（thinking）功能，
+                默认 True。
+        """
         self.provider = provider
         self.workspace = workspace
         self.tools = tools
@@ -70,6 +92,18 @@ class AgentLoop:
 
     @staticmethod
     def _summarize_tool_calls_for_log(tool_calls: List[Any]) -> str:
+        """将工具调用列表格式化为可读的日志摘要字符串。
+
+        用于在日志中快速识别当前批次包含的工具调用及其 ID，
+        避免在日志中打印完整的工具参数（可能过长或包含敏感信息）。
+
+        Args:
+            tool_calls: 工具调用对象列表，每个对象应包含 id 和 name 属性。
+
+        Returns:
+            形如 "tool_name#tool_id, tool_name#tool_id" 的摘要字符串；
+            列表为空时返回 "<none>"。
+        """
         parts = []
         for tool_call in tool_calls:
             tool_id = str(getattr(tool_call, "id", "") or "").strip() or "<empty>"
@@ -81,7 +115,31 @@ class AgentLoop:
         self,
         model_override: Optional[Dict[str, Any]] = None,
     ) -> tuple[Any, Optional[str], float, int, int, bool]:
-        """解析当前消息执行应使用的 provider 和模型参数。"""
+        """解析当前消息执行应使用的 provider 和模型参数。
+
+        优先使用 model_override 中指定的配置覆盖默认值。如果
+        model_override 指定了独立的 provider、api_key 或 api_base，
+        则会动态创建一个新的 provider 实例；创建失败时回退到基础
+        provider。
+
+        Args:
+            model_override: 可选的模型配置覆盖字典，可包含以下键：
+                - model: 模型名称
+                - temperature: 采样温度
+                - max_tokens: 最大 token 数
+                - max_iterations: 最大迭代次数
+                - thinking_enabled: 是否启用思考链
+                - api_mode: API 模式（如 "chat_completions"）
+                - provider: 覆盖的 provider ID
+                - api_key: 覆盖的 API Key
+                - api_base: 覆盖的 API Base URL
+
+        Returns:
+            tuple[provider, model, temperature, max_tokens,
+                  max_iterations, thinking_enabled]:
+            解析后的 (provider实例, 模型名, 温度, 最大token数,
+                       最大迭代次数, 是否启用思考链)。
+        """
         base_provider = self.provider
         base_model = self.model
         base_temperature = self.temperature
@@ -193,7 +251,46 @@ class AgentLoop:
         reasoning_event_handler=None,
         prefer_direct_workflow_result: bool = False,
     ) -> AsyncIterator[str]:
-        """处理用户消息并生成流式响应"""
+        """处理用户消息并生成流式响应（async generator）。
+
+        核心 Agent 循环：
+        1. 构建 messages 上下文（通过 context_builder 或默认方式）
+        2. 解析运行时 provider 与模型参数
+        3. 进入迭代循环：调用 LLM → 解析响应 → 执行工具 → 回传结果
+        4. 在达到 max_iterations 或 LLM 返回纯文本后退出循环
+        5. 将最终响应保存到 session_manager 并写入审计日志
+
+        Args:
+            message: 用户输入的原始消息文本。
+            session_id: 当前会话的唯一标识符。
+            context: 对话历史列表，每条消息为 {"role": ..., "content": ...}
+                格式。为 None 时使用空历史。
+            session_summary: 历史对话摘要文本，用于超长上下文压缩后
+                注入系统提示。
+            media: 媒体文件路径列表（图片、音频等），传给 context_builder
+                处理。
+            channel: 消息来源渠道标识（如 "discord"、"telegram"、"cli"）。
+            chat_id: 来源聊天/群组 ID，用于多机器人账号路由。
+            account_id: 当前机器人账号 ID，用于多账号渠道。
+            cancel_token: 取消令牌对象，包含 is_cancelled 属性。当外部
+                设置取消标志时，循环会在下次检查点优雅终止。
+            yield_intermediate: 是否实时 yield 流式文本块。True 时每收到
+                一个 LLM 文本 chunk 立即产出；False 时只在循环结束时
+                一次性产出最终内容。
+            model_override: 运行时模型配置覆盖字典，详见
+                _resolve_execution_runtime。
+            persona_override: 人设/角色覆盖配置，传递给 context_builder
+                用于动态切换系统提示。
+            tool_event_handler: 工具事件回调函数，接收 ("tool_call"|"tool_result"|"tool_error", data)
+                事件，用于前端实时展示工具执行状态。
+            reasoning_event_handler: 推理过程事件回调函数，接收 LLM 返回的
+                思考链（reasoning）文本块，用于展示模型的内部推理过程。
+            prefer_direct_workflow_result: 当工具名为 "workflow_run" 时，
+                是否直接将其执行结果作为最终响应返回（跳过后续 LLM 总结）。
+
+        Yields:
+            str: 流式产出的 LLM 响应文本块，以及达到限制时的警告信息。
+        """
         logger.debug(f"Processing message for session {session_id}")
         
         # 设置工具注册表的会话ID（用于审计日志）和渠道信息
@@ -659,10 +756,25 @@ class AgentLoop:
         current_provider: Any,
         error_text: str,
     ) -> Optional[Any]:
-        """尝试通过 key 轮换恢复请求。
+        """尝试通过 Key 轮换从 API 错误中恢复。
 
-        当错误是认证/限流相关时，切换到下一个 API Key 并返回新的 provider。
-        如果无法轮换（只有一个 key 或不适用），返回 None。
+        当 LLM API 返回认证或限流相关错误时，切换到备用 API Key
+        并重新创建 provider 实例，以绕过当前 Key 的配额或封禁限制。
+
+        触发条件：
+        - 错误信息包含认证相关关键词（401、unauthorized 等）
+        - 错误信息包含限流相关关键词（429、rate limit 等）
+        - 轮换次数未超过 MAX_KEY_ROTATION_RETRIES
+        - provider 配置了多个 API Key
+
+        Args:
+            current_provider: 当前使用的 provider 实例。
+            error_text: LLM API 返回的错误文本，用于判断是否适合触发
+                轮换。
+
+        Returns:
+            轮换成功时返回新的 provider 实例；无法轮换或轮换耗尽时
+            返回 None。
         """
         if not _is_key_rotation_eligible_error(error_text):
             return None

@@ -58,9 +58,16 @@ data/*.db_*
 backend/tests/
 backend/scripts/
 
+# ── 密钥文件 ────────────────────────────────
+config/keys.json
+
 # ── 运行时 ──────────────────────────────────
 *.pid
 data/.*.pid
+
+# ── 工作空间运行时缓存 ──────────────────────
+workspace/wiki/bm25_index.json
+workspace/.*_seeded
 
 # ── Node ────────────────────────────────────
 node_modules/

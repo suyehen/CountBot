@@ -66,13 +66,24 @@ def create_provider(
             )
     elif effective_api_keys:
         selected_key = effective_api_keys[0]
-    
+
+    # 根据 api_base 自动检测 Anthropic 兼容接口
+    # 当用户配置了 /anthropic 路径的 API 入口时（如 DeepSeek Anthropic 兼容端点），
+    # 自动切换为 AnthropicProvider，避免 OpenAI 格式请求发到 Anthropic 端点导致 404
+    is_anthropic_base = bool(api_base and "/anthropic" in str(api_base).lower())
+
     if metadata and metadata.id == "anthropic":
         provider_class = AnthropicProvider
         logger.debug(f"Using AnthropicProvider for {provider_id}")
     elif metadata and metadata.id in ["minimax", "custom_anthropic"]:
         provider_class = AnthropicProvider
         logger.debug(f"Using AnthropicProvider (compatible) for {provider_id}")
+    elif is_anthropic_base:
+        provider_class = AnthropicProvider
+        logger.info(
+            f"Using AnthropicProvider for {provider_id} "
+            f"(auto-detected from /anthropic in api_base)"
+        )
     else:
         provider_class = OpenAIProvider
         logger.debug(f"Using OpenAIProvider for {provider_id or 'default'}")

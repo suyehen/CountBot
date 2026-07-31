@@ -78,6 +78,26 @@ def _create_shared_components(config, config_loader=None):
     memory_dir = workspace / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
 
+    # 可选向量存储（懒初始化，不装 chromadb 也不影响）
+    # Embedding API 异常直接抛出，不做静默降级
+    vector_store = None
+    try:
+        from backend.modules.vector.store import VectorStore
+        from backend.modules.vector.embedding import load_embedding_from_keys
+        from backend.utils.paths import DATA_DIR
+
+        embedding_fn = load_embedding_from_keys()
+        vector_db_dir = DATA_DIR / "vector_db"
+        vector_store = VectorStore(persist_dir=vector_db_dir, embedding_function=embedding_fn)
+        logger.info(f"VectorStore ready: {vector_db_dir}")
+    except ImportError:
+        logger.info("chromadb not installed, vector search disabled")
+    except FileNotFoundError:
+        logger.warning("config/keys.json not found, vector search disabled. "
+                       "Create config/keys.json with tencent_embedding config to enable.")
+    except Exception as e:
+        logger.warning(f"VectorStore setup failed: {e}")
+
     seed_bundled_workspace_resources(workspace)
 
     # Skills 目录始终从 workspace/skills 加载
@@ -89,8 +109,8 @@ def _create_shared_components(config, config_loader=None):
     logger.info(f"Skills directory: {skills_dir}")
 
     logger.info("Initializing memory store...")
-    memory = MemoryStore(memory_dir)
-    
+    memory = MemoryStore(memory_dir, vector_store=vector_store)
+
     logger.info("Loading skills...")
     skills = SkillsLoader(skills_dir)
 

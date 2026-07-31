@@ -14,21 +14,32 @@
 - 对话自动总结写入
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 from datetime import datetime
 from pathlib import Path
 
 from loguru import logger
 
+if TYPE_CHECKING:
+    from backend.modules.vector.store import VectorStore
+
 
 class MemoryStore:
-    """记忆存储 - 基于单文件的行式记忆管理"""
+    """记忆存储 - 基于单文件的行式记忆管理
 
-    def __init__(self, memory_dir: Path):
+    可选集成向量存储（VectorStore）以支持语义搜索：
+    - 传入 vector_store 后，写入时自动索引到向量库
+    - 搜索时优先使用向量语义搜索，失败/不可用时回退关键词搜索
+    - 未传入 vector_store 时行为与原有完全一致
+    """
+
+    def __init__(self, memory_dir: Path, vector_store: Optional["VectorStore"] = None):
         self.memory_dir = memory_dir
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         self.memory_file = self.memory_dir / "MEMORY.md"
-        logger.debug(f"MemoryStore initialized: {self.memory_file}")
+        self._vector_store = vector_store
+        logger.debug(f"MemoryStore initialized: {self.memory_file}"
+                     f"{' (with vector store)' if vector_store else ''}")
 
     def _read_lines(self) -> List[str]:
         """读取所有记忆行"""
@@ -82,6 +93,19 @@ class MemoryStore:
 
         line_num = len(lines)
         logger.info(f"Memory appended at line {line_num}: {entry[:80]}...")
+
+        # 同步写入向量索引（可选）
+        if self._vector_store is not None:
+            self._vector_store.add_entry(
+                entry_id=str(line_num),
+                text=entry,
+                metadata={
+                    "line_number": line_num,
+                    "source": source,
+                    "date": date_str,
+                },
+            )
+
         return line_num
 
     def read_lines(self, start: int, end: Optional[int] = None) -> str:
@@ -114,19 +138,28 @@ class MemoryStore:
         return "\n".join(result)
 
     def search(self, keywords: List[str], max_results: int = 15, match_mode: str = "or") -> str:
-        """关键词搜索记忆
+        """搜索记忆（优先语义搜索，回退关键词搜索）
 
-        支持单词和多词搜索，可选择AND或OR逻辑。
+        支持单词和多词搜索，可选择AND或OR逻辑（仅关键词回退时生效）。
         搜索不区分大小写。
+
+        如果配置了向量存储且可用，优先使用语义搜索；
+        向量搜索失败或不可用时自动回退到关键词搜索。
 
         Args:
             keywords: 关键词列表
             max_results: 最大返回条数
             match_mode: 匹配模式，"or"（任意匹配）或"and"（全部匹配），默认"or"
+                       仅对关键词回退生效；语义搜索不需要此参数
 
         Returns:
             str: 格式化的搜索结果，每行带行号前缀
         """
+        # 优先尝试向量语义搜索
+        if self._vector_store is not None and self._vector_store.available:
+            return self._vector_search(keywords, max_results)
+
+        # ── 关键词搜索回退（原有逻辑）──
         lines = self._read_lines()
         if not lines:
             return "记忆为空，无搜索结果"
@@ -210,6 +243,48 @@ class MemoryStore:
             result.append(f"[{i + 1}] {lines[i]}")
 
         return "\n".join(result)
+
+    def _vector_search(self, keywords: List[str], max_results: int) -> str:
+        """向量语义搜索记忆。
+
+        将关键词合并为自然语言查询，调用 VectorStore.search()，
+        结果格式化为与关键词搜索一致的 [line_num] content 格式。
+
+        Args:
+            keywords: 关键词列表
+            max_results: 最大返回结果数
+
+        Returns:
+            str: 格式化的搜索结果
+        """
+        query = " ".join(keywords)
+        results = self._vector_store.search(query, n_results=max_results)
+
+        if not results:
+            return f"未找到与 '{', '.join(keywords)}' 语义相关的记忆"
+
+        lines_out = []
+        for r in results:
+            line_num = r.get("metadata", {}).get("line_number", r.get("id", "?"))
+            content = r.get("document", "")
+            lines_out.append(f"[{line_num}] {content}")
+
+        return "\n".join(lines_out) if lines_out else f"未找到与 '{', '.join(keywords)}' 语义相关的记忆"
+
+    def rebuild_vector_index(self) -> dict:
+        """从 MEMORY.md 重建向量索引。
+
+        适用于首次启用向量搜索或索引损坏后恢复的场景。
+
+        Returns:
+            dict: {"status": "ok"|"skipped", "count": int, "total_lines": int}
+        """
+        if self._vector_store is None:
+            return {"status": "skipped", "reason": "vector store not configured"}
+
+        lines = self._read_lines()
+        count = self._vector_store.rebuild_from_lines(lines)
+        return {"status": "ok", "count": count, "total_lines": len(lines)}
 
     def get_stats(self) -> dict:
         """获取记忆统计信息"""
