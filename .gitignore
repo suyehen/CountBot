@@ -98,7 +98,6 @@ temp/
 
 # ── 构建产物 ────────────────────────────────
 dist/
-!frontend/dist/
 release/
 *.spec
 
