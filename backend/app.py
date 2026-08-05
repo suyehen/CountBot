@@ -84,10 +84,10 @@ def _create_shared_components(config, config_loader=None):
     try:
         from backend.modules.vector.store import VectorStore
         from backend.modules.vector.embedding import load_embedding_from_keys
-        from backend.utils.paths import DATA_DIR
+        from backend.utils.paths import CHROMA_DIR
 
         embedding_fn = load_embedding_from_keys()
-        vector_db_dir = DATA_DIR / "vector_db"
+        vector_db_dir = CHROMA_DIR
         vector_store = VectorStore(persist_dir=vector_db_dir, embedding_function=embedding_fn)
         logger.info(f"VectorStore ready: {vector_db_dir}")
     except ImportError:

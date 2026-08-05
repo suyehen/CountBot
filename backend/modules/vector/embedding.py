@@ -2,8 +2,12 @@
 
 提供腾讯云 Embedding 服务（OpenAI 兼容格式），通过 httpx 调用远程 API。
 API 调用失败直接抛异常，不做静默降级。
+
+密钥文件路径:
+    优先读取 COUNTBOT_KEYS_PATH 环境变量 → 未设置时回退 config/keys.json（相对路径）。
 """
 
+import os
 from typing import List
 
 import httpx
@@ -92,8 +96,13 @@ class TencentEmbedding(_ChromaEF):  # type: ignore
         return embeddings
 
 
-def load_embedding_from_keys(keys_path: str = "config/keys.json") -> TencentEmbedding:
+def load_embedding_from_keys(keys_path: str | None = None) -> TencentEmbedding:
     """从 keys.json 文件加载腾讯云 Embedding 配置并创建实例。
+
+    路径优先级:
+    1. 显式传入 keys_path 参数
+    2. COUNTBOT_KEYS_PATH 环境变量
+    3. 默认回退 config/keys.json（相对路径）
 
     keys.json 格式:
     {
@@ -105,7 +114,7 @@ def load_embedding_from_keys(keys_path: str = "config/keys.json") -> TencentEmbe
     }
 
     Args:
-        keys_path: keys.json 文件路径
+        keys_path: 密钥文件路径（可选，None 则走优先级链）
 
     Returns:
         TencentEmbedding 实例
@@ -117,6 +126,10 @@ def load_embedding_from_keys(keys_path: str = "config/keys.json") -> TencentEmbe
     """
     import json
     from pathlib import Path
+
+    # 路径优先级：参数 > 环境变量 > 默认
+    if keys_path is None:
+        keys_path = os.getenv("COUNTBOT_KEYS_PATH", "config/keys.json")
 
     path = Path(keys_path).resolve()
     if not path.exists():

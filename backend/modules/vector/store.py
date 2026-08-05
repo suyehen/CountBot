@@ -85,6 +85,7 @@ class VectorStore:
         self._collection = self._client.get_or_create_collection(
             name=self._collection_name,
             embedding_function=self._embedding_function,
+            metadata={"hnsw:space": "cosine"},
         )
 
         count = self._collection.count()
@@ -250,6 +251,7 @@ class VectorStore:
         self._collection = self._client.create_collection(
             name=self._collection_name,
             embedding_function=self._embedding_function,
+            metadata={"hnsw:space": "cosine"},
         )
 
         # 解析行并批量索引

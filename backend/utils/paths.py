@@ -1,5 +1,11 @@
-"""统一路径管理。"""
+"""统一路径管理。
 
+环境变量:
+    COUNTBOT_RUNTIME_DIR: 持久化数据根目录（生产设为 /vdb/countbot）。
+        未设置时回退到 RUNTIME_ROOT（项目根目录），保持开发兼容。
+"""
+
+import os
 import sys
 from pathlib import Path
 
@@ -73,8 +79,27 @@ def get_config_dir() -> Path:
 
 APPLICATION_ROOT = get_application_root()
 RUNTIME_ROOT = get_runtime_root()
-DATA_DIR = get_data_dir()
-WORKSPACE_DIR = get_workspace_dir()
+
+
+def get_runtime_dir() -> Path:
+    """获取持久化数据根目录。
+
+    优先读取 COUNTBOT_RUNTIME_DIR 环境变量；
+    未设置时回退到 RUNTIME_ROOT（项目根目录），保持开发兼容。
+    """
+    env_dir = os.getenv("COUNTBOT_RUNTIME_DIR", "").strip()
+    if env_dir:
+        return Path(env_dir).resolve()
+    return RUNTIME_ROOT
+
+
+RUNTIME_DIR = get_runtime_dir()
+DATA_DIR = RUNTIME_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+WORKSPACE_DIR = RUNTIME_DIR / "workspace"
+WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+CHROMA_DIR = RUNTIME_DIR / "chroma"
+# CHROMA_DIR 目录由 VectorStore 懒初始化时创建，不在此处 mkdir
 CONFIG_DIR = get_config_dir()
 
 
