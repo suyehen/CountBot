@@ -19,9 +19,18 @@ $archivePath = Join-Path $releaseRoot "$releaseName.tar.gz"
 Write-Host ">>> Packaging: $releaseName" -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
 
-robocopy . $stagingDir /E /XD .git .idea .pytest_cache __pycache__ node_modules data workspace release config /XF *.pyc CountBot-*.tar.gz
+robocopy . $stagingDir /E /XD .git .idea .pytest_cache __pycache__ node_modules release /XF *.pyc CountBot-*.tar.gz
 if ($LASTEXITCODE -gt 7) {
     throw "robocopy failed, exit code: $LASTEXITCODE"
+}
+
+# 删除根目录的持久化/敏感目录（但保留 backend/modules/ 下的同名源码）
+@('config', 'data', 'workspace') | ForEach-Object {
+    $dir = Join-Path $stagingDir $_
+    if (Test-Path $dir) {
+        Remove-Item -Recurse -Force $dir
+        Write-Host ">>> Removed $_/ from package" -ForegroundColor DarkGray
+    }
 }
 
 tar.exe -czf $archivePath -C $releaseRoot $releaseName

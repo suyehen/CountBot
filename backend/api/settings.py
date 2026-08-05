@@ -28,6 +28,9 @@ def _normalize_api_mode_value(value: Any) -> str:
     return "chat_completions"
 
 
+_MASKED_PREFIX = "****"
+
+
 def _mask_api_key(key: str | None) -> str:
     """脱敏 API 密钥：仅显示后 4 位，其余替换为 *。
 
@@ -37,8 +40,13 @@ def _mask_api_key(key: str | None) -> str:
     if not key:
         return ""
     if len(key) <= 4:
-        return "****"
-    return "****" + key[-4:]
+        return _MASKED_PREFIX
+    return _MASKED_PREFIX + key[-4:]
+
+
+def _is_masked_key(value: str) -> bool:
+    """判断是否为脱敏后的密钥（以 **** 开头），避免把掩码写回数据库。"""
+    return bool(value) and value.startswith(_MASKED_PREFIX)
 
 
 def _coerce_boolean_value(value: Any, *, field_name: str) -> bool:
@@ -1046,13 +1054,14 @@ async def update_settings(request: UpdateSettingsRequest, req: Request) -> Setti
                     provider_config.enabled = provider_data["enabled"]
 
                 if "api_key" in provider_data:
-                    provider_config.api_key = provider_data["api_key"]
+                    if not _is_masked_key(provider_data["api_key"]):
+                        provider_config.api_key = provider_data["api_key"]
 
                 if "api_keys" in provider_data:
                     raw_keys = provider_data["api_keys"]
                     if isinstance(raw_keys, list):
                         provider_config.api_keys = [
-                            k for k in raw_keys if isinstance(k, str) and k.strip()
+                            k for k in raw_keys if isinstance(k, str) and k.strip() and not _is_masked_key(k)
                         ]
                     else:
                         provider_config.api_keys = []
