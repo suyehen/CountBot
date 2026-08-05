@@ -1,5 +1,6 @@
 """Wiki API 端点 - 基于模块化 Wiki 服务"""
 
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -121,11 +122,28 @@ class WikiCompileResponse(BaseModel):
 
 def _generate_slug(title: str) -> str:
     """生成 URL 友好的 slug"""
-    import re
     slug = title.lower().strip()
     slug = re.sub(r'[^\w\s\u4e00-\u9fff-]', '', slug)
     slug = re.sub(r'[\s_-]+', '-', slug)
     return slug[:100] or "untitled"
+
+
+# Slug \u767d\u540d\u5355\u6b63\u5219\uff1a\u53ea\u5141\u8bb8\u5b57\u6bcd\u3001\u6570\u5b57\u3001\u8fde\u5b57\u7b26\u3001\u4e0b\u5212\u7ebf\u3001\u4e2d\u6587\u5b57\u7b26
+_SLUG_PATTERN = re.compile(r'^[A-Za-z0-9_\-\u4e00-\u9fff]+$')
+
+
+def _validate_slug(slug: str) -> str:
+    """\u6821\u9a8c slug \u5408\u6cd5\u6027\uff0c\u9632\u6b62\u8def\u5f84\u7a7f\u8d8a\u653b\u51fb\u3002
+
+    \u53ea\u5141\u8bb8\u5b57\u6bcd\u3001\u6570\u5b57\u3001\u4e0b\u5212\u7ebf\u3001\u8fde\u5b57\u7b26\u3001\u4e2d\u6587\u5b57\u7b26\u3002
+    \u901a\u8fc7\u8fd4\u56de\u539f\u503c\uff1b\u4e0d\u901a\u8fc7\u629b\u51fa 400\u3002
+    """
+    if not _SLUG_PATTERN.match(slug):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid slug: '{slug}'. Only alphanumeric, hyphens, underscores, and Chinese characters are allowed.",
+        )
+    return slug
 
 
 def _get_concepts_dir() -> Path:
@@ -388,6 +406,7 @@ async def batch_delete_entries(slugs: List[str]) -> Dict[str, Any]:
         failed = []
 
         for slug in slugs:
+            _validate_slug(slug)
             md_file = concepts_dir / f"{slug}.md"
             if md_file.exists():
                 try:
@@ -432,6 +451,7 @@ async def batch_update_tags(request: Dict[str, Any]) -> Dict[str, Any]:
         failed = []
 
         for slug in slugs:
+            _validate_slug(slug)
             md_file = concepts_dir / f"{slug}.md"
             if not md_file.exists():
                 failed.append({"slug": slug, "error": "Not found"})
@@ -498,6 +518,7 @@ async def import_wiki(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
 
         for entry in entries:
             slug = entry.get("slug")
+            _validate_slug(slug)
             title = entry.get("title")
             content = entry.get("content")
             tags = entry.get("tags", [])
@@ -605,8 +626,9 @@ async def update_wiki_entry(
     """更新 Wiki 条目"""
     import frontmatter
     from datetime import datetime
-    
+
     try:
+        _validate_slug(slug)
         concepts_dir = _get_concepts_dir()
         md_file = concepts_dir / f"{slug}.md"
         
@@ -662,6 +684,7 @@ async def update_wiki_entry(
 async def delete_wiki_entry(slug: str) -> None:
     """删除 Wiki 条目"""
     try:
+        _validate_slug(slug)
         concepts_dir = _get_concepts_dir()
         md_file = concepts_dir / f"{slug}.md"
         

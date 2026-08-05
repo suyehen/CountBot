@@ -193,7 +193,11 @@ class WikiService:
     @lru_cache(maxsize=128)
     def _get_document_cached(self, slug: str, cache_version: int) -> Optional[dict]:
         """内部缓存方法"""
-        md_file = self._concepts_dir / f"{slug}.md"
+        md_file = (self._concepts_dir / f"{slug}.md").resolve()
+        # 防止路径穿越：确保解析后的路径仍在 concepts_dir 内
+        if not str(md_file).startswith(str(self._concepts_dir.resolve())):
+            logger.warning(f"Wiki slug rejected (path traversal attempt): {slug}")
+            return None
         if not md_file.exists():
             return None
 

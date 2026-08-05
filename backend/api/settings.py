@@ -28,6 +28,19 @@ def _normalize_api_mode_value(value: Any) -> str:
     return "chat_completions"
 
 
+def _mask_api_key(key: str | None) -> str:
+    """脱敏 API 密钥：仅显示后 4 位，其余替换为 *。
+
+    用于 GET /api/settings 响应中避免密钥明文泄露。
+    include_api_keys=false 时调用此函数。
+    """
+    if not key:
+        return ""
+    if len(key) <= 4:
+        return "****"
+    return "****" + key[-4:]
+
+
 def _coerce_boolean_value(value: Any, *, field_name: str) -> bool:
     """将用户输入安全转换为布尔值，拒绝模糊字符串。"""
     if isinstance(value, bool):
@@ -912,25 +925,34 @@ async def get_available_providers() -> List[ProviderMetadataResponse]:
 
 
 @router.get("", response_model=SettingsResponse)
-async def get_settings() -> SettingsResponse:
+async def get_settings(include_api_keys: bool = False) -> SettingsResponse:
     """
     获取所有设置
-    
+
+    Args:
+        include_api_keys: 是否返回完整的 API 密钥（默认脱敏，仅显示后4位用于识别）
+
     Returns:
         SettingsResponse: 设置信息
     """
     try:
         config = config_loader.config
-        
-        # 构建 providers 响应（不脱敏，直接返回）
+
+        # 构建 providers 响应
         providers_response = {}
         for name, provider_config in config.providers.items():
+            effective_keys = provider_config.get_effective_api_keys()
             providers_response[name] = ProviderConfigResponse(
                 enabled=provider_config.enabled,
-                api_key=provider_config.api_key,
-                api_keys=provider_config.get_effective_api_keys(),
+                api_key=_mask_api_key(provider_config.api_key) if not include_api_keys else provider_config.api_key,
+                api_keys=effective_keys if include_api_keys else [
+                    _mask_api_key(k) for k in (effective_keys or [])
+                ],
                 api_base=provider_config.api_base,
             )
+
+        if include_api_keys:
+            logger.warning("API keys exposed in GET /api/settings response")
         
         # 构建响应
         return SettingsResponse(
@@ -1640,23 +1662,36 @@ async def set_workspace_path(request: Request):
 @router.get("/export")
 async def export_settings(
     include_api_keys: bool = False,
-    sections: Optional[str] = None
+    sections: Optional[str] = None,
+    confirm: bool = False,
 ):
     """
     导出配置
-    
+
     Args:
         include_api_keys: 是否包含 API 密钥（默认不包含，保护敏感信息）
         sections: 要导出的配置节，逗号分隔（如：providers,model,persona）
-    
+        confirm: 导出密钥时需显式确认（include_api_keys=true 时必需）
+
     Returns:
         JSON 格式的配置文件
     """
     try:
         from datetime import datetime
-        
+
+        # 密钥导出需二次确认
+        if include_api_keys and not confirm:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Exporting API keys requires confirmation. Set confirm=true to proceed.",
+            )
+
         # 添加日志以便调试
         logger.info(f"导出配置请求: include_api_keys={include_api_keys} (type={type(include_api_keys).__name__}), sections={sections}")
+
+        # 审计日志：密钥导出操作
+        if include_api_keys:
+            logger.warning("AUDIT: Config export WITH API KEYS — all provider/channel secrets exposed")
         
         config = config_loader.config
         config_dict = config.model_dump()

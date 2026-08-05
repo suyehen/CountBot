@@ -452,6 +452,14 @@ def get_tool_registry():
     except AttributeError:
         return None
 
+
+def get_shared_provider():
+    """返回全局共享 LLM provider，供 wiki 等模块内部调用。"""
+    try:
+        return app.state.shared.get("provider")
+    except AttributeError:
+        return None
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[],
